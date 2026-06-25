@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+artifacts/
+test_*.py
+.DS_Store
+*.csv
+*.jsonl
+*.json
+*.docx
+*.yaml
