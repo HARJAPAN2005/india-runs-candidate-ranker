@@ -103,6 +103,26 @@ def _yoe_fit(yoe: float) -> float:
     return max(0.60, 1.0 - (yoe - 11) * 0.04)
 
 
+# Services-firm substrings for current-employer gate.
+# Mirrors SERVICES_FIRMS in precompute.py; checked case-insensitively against
+# current_company so any variant ("Genpact AI", "Genpact Technologies", etc.) is caught.
+_SERVICES_SUBSTRINGS: frozenset[str] = frozenset({
+    "tcs", "tata consultancy", "infosys", "wipro", "accenture", "cognizant",
+    "capgemini", "hcl", "tech mahindra", "hexaware", "mphasis", "mindtree",
+    "l&t infotech", "ltimindtree", "lti mindtree", "syntel", "virtusa",
+    "zensar", "kpit", "persistent systems", "cyient", "igate", "mastech",
+    "niit technologies", "birlasoft", "dxc technology", "ntt data", "unisys",
+    "genpact", "ibm global", "epam", "globallogic", "stefanini", "atos",
+    "sopra steria", "coforge",
+})
+
+
+def _current_company_is_services(company: str) -> bool:
+    """Case-insensitive substring match against known services firms."""
+    c = (company or "").lower().strip()
+    return any(s in c for s in _SERVICES_SUBSTRINGS)
+
+
 # Tiered recsys evidence families.
 # Strong (2.0 pts): specific ranking/retrieval/recsys evidence — the real signal.
 # Medium (1.0 pt): infra/tooling relevant but not proof of ranking systems.
@@ -473,18 +493,24 @@ def main() -> None:
     avail_mult = df.apply(_availability_multiplier, axis=1).values.astype(np.float64)
     print(f"  Done  ({time.time()-t0:.1f}s)")
 
-    # ── 8. Hard gates (honeypot + yoe floor) ─────────────────────────────────
+    # ── 8. Hard gates (honeypot + yoe floor + current-employer services) ──────
     honeypot_mask  = df["is_honeypot"].values.astype(bool)
     yoe_floor_mask = df["yoe"].values < 5          # JD minimum: 5 years
-    hp_count  = honeypot_mask.sum()
-    yoe_count = yoe_floor_mask.sum()
-    print(f"Honeypots gated out:       {hp_count}")
-    print(f"Under-5yr gated out:       {yoe_count}")
+    curr_svc_mask  = df["current_company"].apply(
+        lambda co: _current_company_is_services(str(co))
+    ).values.astype(bool)
+    hp_count   = honeypot_mask.sum()
+    yoe_count  = yoe_floor_mask.sum()
+    csvc_count = curr_svc_mask.sum()
+    print(f"Honeypots gated out:           {hp_count}")
+    print(f"Under-5yr gated out:           {yoe_count}")
+    print(f"Current-employer svc gated out:{csvc_count}")
 
     # ── 9. Final scores ────────────────────────────────────────────────────────
     final_scores = match_scores * avail_mult
     final_scores[honeypot_mask]  = 0.0   # hard exclusion
     final_scores[yoe_floor_mask] = 0.0   # hard yoe floor
+    final_scores[curr_svc_mask]  = 0.0   # currently at services firm
 
     # Normalize to [0, 1] (top candidate = 1.0)
     top_val = final_scores.max()
