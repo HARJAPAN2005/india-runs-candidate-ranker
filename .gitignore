@@ -1,10 +1,11 @@
-# Challenge data — not committed (487 MB dataset + sample files + docs)
-# Only validate_submission.py is kept from this directory.
+# Challenge data — not committed (487 MB dataset + docs)
 India_runs_data_and_ai_challenge/*.jsonl
-India_runs_data_and_ai_challenge/*.json
 India_runs_data_and_ai_challenge/*.csv
 India_runs_data_and_ai_challenge/*.docx
 India_runs_data_and_ai_challenge/*.yaml
+# Keep schema + 50-candidate sample for demo notebook
+!India_runs_data_and_ai_challenge/candidate_schema.json
+!India_runs_data_and_ai_challenge/sample_candidates.json
 
 # Test / scratch scripts
 test_*.py

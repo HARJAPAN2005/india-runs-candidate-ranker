@@ -526,7 +526,12 @@ def main() -> None:
         df["candidate_id"].values,            # secondary: ascending (numpy lexsort reverses priority)
         -final_scores,                        # primary: descending score
     ))
-    top_idx = sorted_idx[:args.top_k]
+    eligible_count = int((final_scores > 0).sum())
+    effective_k = min(args.top_k, eligible_count)
+    if effective_k < args.top_k:
+        print(f"Note: only {eligible_count} candidates passed all gates; "
+              f"outputting {effective_k} rows (pool smaller than top-{args.top_k})")
+    top_idx = sorted_idx[:effective_k]
 
     elapsed_so_far = time.time() - t_wall
     print(f"\nRanking done in {elapsed_so_far:.1f}s. Generating reasoning …")

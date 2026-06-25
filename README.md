@@ -62,6 +62,32 @@ Measured peak RAM:
   runtime buffers + growing 100 K × 384 output array); ~0.8 GB for feature extraction
   and BM25 indexing
 
+## Demo / Sandbox
+
+**Google Colab** (runs on a free CPU runtime, no setup required):
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/HARJAPAN2005/india-runs-candidate-ranker/blob/main/demo.ipynb)
+
+Clones the repo, installs dependencies, converts the bundled 50-candidate sample to
+JSONL, runs `precompute.py` + `rank.py`, and displays the ranked CSV. Runtime ~3–4 min
+on a free Colab CPU (model download dominates on first run).
+
+**Docker** (runs the full ranker unmodified):
+
+```bash
+docker build -t candidate-ranker .
+
+docker run \
+  -v /absolute/path/to/candidates.jsonl:/app/India_runs_data_and_ai_challenge/candidates.jsonl \
+  -v $(pwd)/artifacts:/app/artifacts \
+  -v $(pwd)/submission.csv:/app/submission.csv \
+  candidate-ranker
+```
+
+- Mount `candidates.jsonl` (487 MB, from the challenge portal) at the path above.
+- `artifacts/` is mounted so the embedding step is cached between runs.
+- `submission.csv` appears in your current directory after the run.
+- To run steps separately: append `python precompute.py` or `python rank.py` to override `CMD`.
+
 ## How it works
 
 ### precompute.py (run once)
