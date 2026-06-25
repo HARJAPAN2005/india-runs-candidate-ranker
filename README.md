@@ -39,10 +39,14 @@ Saves everything to `artifacts/` — subsequent runs skip completed steps automa
 ### 4. Rank candidates (≤5 min, no network)
 
 ```bash
-python rank.py
+python rank.py --candidates ./India_runs_data_and_ai_challenge/candidates.jsonl --out ./submission.csv
 ```
 
 Outputs `submission.csv` — 100 ranked candidates.
+
+All flags are optional; defaults match the paths above so `python rank.py` is equivalent.
+Available flags: `--candidates` (data source, informational), `--out` (output path),
+`--artifacts` (precomputed artifact directory, default `artifacts/`), `--top-k` (default 100).
 
 ### 5. Validate
 

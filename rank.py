@@ -414,7 +414,9 @@ def main() -> None:
                         help="Directory of precomputed artifacts")
     parser.add_argument("--candidates",
                         default="India_runs_data_and_ai_challenge/candidates.jsonl",
-                        help="Path to candidates.jsonl (used only for ID validation)")
+                        help="Path to candidates.jsonl. rank.py reads from precomputed "
+                             "artifacts (--artifacts dir), not this file directly; "
+                             "pass it for self-documentation of the data source.")
     parser.add_argument("--out",  default="submission.csv",
                         help="Output CSV path")
     parser.add_argument("--top-k", type=int, default=100)
