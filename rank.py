@@ -247,20 +247,34 @@ _RECSYS_LABEL_MAP = {
 }
 
 
+# Priority order for lead signal selection: most specific/rare first.
+# Two candidates with the same terms get the same top-1 signal, but voice
+# variation (below) ensures the sentence is worded differently.
+_SIGNAL_PRIORITY = [
+    "ltr", "eval_metrics", "dense_retrieval", "hybrid_retrieval",
+    "retrieval_quality", "collab_filter", "ir", "vector_search",
+    "recommendation", "vector_db", "search_infra", "ranking",
+    "ml_serving", "search_system", "ab_testing", "deployed_ml",
+]
+
+
 def _generate_reasoning(row: pd.Series, rank: int) -> str:
     """
-    Produce a 1–2 sentence reasoning string grounded in real profile facts.
-    Varies structure based on what's most notable about this candidate.
-    Never claims facts not present in the features.
+    Produce a 1–2 sentence reasoning grounded in real profile facts.
+
+    Divergence rules:
+    - Lead signal is the highest-priority term the candidate actually has,
+      so two candidates with different strongest signals get different leads.
+    - voice = candidate_id % 4 selects one of four distinct sentence templates,
+      so two candidates with *identical* term sets still read differently.
+    - Tech bullet order in sentence 2 is rotated by voice, adding further variety.
+    - Candidates with no/weak recsys evidence get an explicit honest qualifier.
     """
-    title   = str(row["current_title"] or "").strip() or "candidate"
+    cid     = str(row["candidate_id"])
     company = str(row["current_company"] or "").strip()
     yoe     = float(row["yoe"])
     prod_r  = float(row["product_ratio"])
-    recsys  = float(row["recsys_evidence_score"])
-    terms   = [_RECSYS_LABEL_MAP.get(t, t)
-               for t in str(row["recsys_terms_str"]).split(",")
-               if t and t in _RECSYS_LABEL_MAP]
+    terms   = {t for t in str(row["recsys_terms_str"]).split(",") if t}
     notable = [c for c in str(row["notable_companies"]).split(",") if c]
     dsa     = int(row["days_since_active"])
     rr      = float(row["response_rate"])
@@ -271,71 +285,98 @@ def _generate_reasoning(row: pd.Series, rank: int) -> str:
     emb     = bool(row["embedding_evidence"])
     evl     = bool(row["eval_framework_evidence"])
 
-    parts: list[str] = []
+    tiered = _tiered_recsys_score(str(row["recsys_terms_str"]))
 
-    # ── Lead sentence: what makes this candidate notable (or not) ───────────
-    if recsys >= 0.5 and not svc:
-        tech_bits = terms[:2] if terms else []
-        co_str    = f" (including {', '.join(notable[:2])})" if notable else ""
-        if tech_bits:
-            parts.append(
-                f"{yoe:.0f}-yr career{co_str} shows direct evidence of "
-                f"{' and '.join(tech_bits)} in career descriptions."
-            )
+    # Signals in priority order, labelled
+    ordered = [t for t in _SIGNAL_PRIORITY if t in terms]
+    top1_key = ordered[0] if ordered else None
+    top2_key = ordered[1] if len(ordered) >= 2 else None
+    top1 = _RECSYS_LABEL_MAP.get(top1_key, top1_key) if top1_key else None
+    top2 = _RECSYS_LABEL_MAP.get(top2_key, top2_key) if top2_key else None
+
+    # Deterministic style selector (0–3) per candidate
+    voice = int(cid.split("_")[-1]) % 4
+    co_str = f" (including {', '.join(notable[:2])})" if notable else ""
+
+    # ── Lead sentence ─────────────────────────────────────────────────────────
+    if not svc and tiered >= 0.25 and top1:
+        pair = f"{top1} and {top2}" if top2 else top1
+        if voice == 0:
+            # Evidence-first: "N-yr career (Co1, Co2) shows direct evidence of X and Y"
+            lead = (f"{yoe:.0f}-yr career{co_str} shows direct evidence of "
+                    f"{pair} in career descriptions.")
+        elif voice == 1:
+            # Span + company: "N years across Co1 and Co2, with hands-on X in production"
+            co_across = (f" across {' and '.join(notable[:2])}"
+                         if len(notable) >= 2 else co_str)
+            lead = (f"{yoe:.0f} years{co_across}, with hands-on "
+                    f"{top1} experience in production.")
+        elif voice == 2:
+            # Evidence-led, no "shows": "Career-spanning evidence of X and Y (Co1, Co2)"
+            lead = f"Career-spanning evidence of {pair}{co_str}."
         else:
-            parts.append(
-                f"{yoe:.0f}-yr career{co_str} shows strong retrieval/ranking evidence "
-                f"in career descriptions."
-            )
-    elif prod_r >= 0.7 and not svc:
-        co_str = f", most recently at {company}" if company else ""
-        parts.append(
-            f"{yoe:.0f} yrs primarily at product companies{co_str}; "
-            f"product-company ratio {prod_r:.0%}."
+            # Company-first: "From Co1 to Co2: N-yr track record in X"
+            if len(notable) >= 2:
+                lead = (f"From {notable[0]} to {notable[1]}: "
+                        f"{yoe:.0f}-yr track record in {top1}.")
+            else:
+                lead = (f"{yoe:.0f}-yr career{co_str} demonstrates "
+                        f"{top1} in production.")
+
+    elif not svc and prod_r >= 0.6:
+        # Meaningful product background but limited ranking-system evidence
+        co_str2 = f", most recently at {company}" if company else ""
+        lead = (
+            f"{yoe:.0f} yrs primarily at product companies{co_str2} "
+            f"(ratio {prod_r:.0%}); limited direct ranking-system evidence "
+            f"in career descriptions - included on product-company fit and "
+            f"availability signals."
         )
     elif svc:
-        co_str = f" at {', '.join(notable[:2])}" if notable else ""
-        parts.append(
-            f"{title} with {yoe:.0f} yrs{co_str}; "
-            f"career is services-only — does not match the JD's product-company requirement."
+        co_str2 = f" at {', '.join(notable[:2])}" if notable else ""
+        title = str(row.get("current_title", "") or "").strip() or "candidate"
+        lead = (
+            f"{title} with {yoe:.0f} yrs{co_str2}; career is services-only "
+            f"- does not match the JD's product-company requirement."
         )
     else:
-        co_str = f" at {company}" if company else ""
-        parts.append(f"{title}{co_str}, {yoe:.0f} yrs experience.")
+        co_str2 = f" at {company}" if company else ""
+        title = str(row.get("current_title", "") or "").strip() or "candidate"
+        lead = f"{title}{co_str2}, {yoe:.0f} yrs experience; limited matching evidence."
 
-    # ── Second sentence: tech depth + signal values + any concern ──────────
-    detail_bits: list[str] = []
-    if vec:
-        detail_bits.append("vector DB experience in career history")
-    if emb:
-        detail_bits.append("embedding deployment mentioned")
-    if evl:
-        detail_bits.append("eval framework (NDCG/MRR) referenced")
+    # ── Second sentence: tech depth + availability signals ────────────────────
+    tech_pool: list[str] = []
+    if vec: tech_pool.append("vector DB experience")
+    if emb: tech_pool.append("embedding deployment")
+    if evl: tech_pool.append("eval framework (NDCG/MRR)")
+    # Rotate bullet order by voice so two candidates with the same tech facts
+    # don't produce identical second sentences
+    if tech_pool:
+        rot = voice % len(tech_pool)
+        tech_pool = tech_pool[rot:] + tech_pool[:rot]
 
-    signal_bits: list[str] = []
+    avail_pool: list[str] = []
     if dsa <= 30:
-        signal_bits.append(f"active {dsa}d ago")
+        avail_pool.append(f"active {dsa}d ago")
     elif dsa <= 90:
-        signal_bits.append(f"active ~{dsa//30}mo ago")
+        avail_pool.append(f"active ~{dsa//30}mo ago")
     elif dsa > 365:
-        signal_bits.append(f"inactive {dsa//30}mo — availability concern")
+        avail_pool.append(f"inactive {dsa//30}mo - availability concern")
     if otw:
-        signal_bits.append("open-to-work")
+        avail_pool.append("open-to-work")
     if rr >= 0.50:
-        signal_bits.append(f"response rate {rr:.0%}")
+        avail_pool.append(f"response rate {rr:.0%}")
     elif rr < 0.20 and rank <= 50:
-        signal_bits.append(f"low response rate ({rr:.0%}) — reachability concern")
+        avail_pool.append(f"low response rate ({rr:.0%}) - reachability concern")
     if nd > 90:
-        signal_bits.append(f"{nd}d notice period")
+        avail_pool.append(f"{nd}d notice period")
     elif nd <= 30:
-        signal_bits.append(f"{nd}d notice")
+        avail_pool.append(f"{nd}d notice")
 
-    all_bits = detail_bits + signal_bits
-    if all_bits:
-        parts.append("; ".join(all_bits) + ".")
+    all_bits = tech_pool + avail_pool
+    second = ("; ".join(all_bits) + ".") if all_bits else ""
 
-    # Glue together, keeping to ≤2 sentences
-    return " ".join(parts[:2])
+    return f"{lead} {second}".strip()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -432,14 +473,18 @@ def main() -> None:
     avail_mult = df.apply(_availability_multiplier, axis=1).values.astype(np.float64)
     print(f"  Done  ({time.time()-t0:.1f}s)")
 
-    # ── 8. Honeypot gate ──────────────────────────────────────────────────────
-    honeypot_mask = df["is_honeypot"].values.astype(bool)
-    hp_count = honeypot_mask.sum()
-    print(f"Honeypots gated out: {hp_count}")
+    # ── 8. Hard gates (honeypot + yoe floor) ─────────────────────────────────
+    honeypot_mask  = df["is_honeypot"].values.astype(bool)
+    yoe_floor_mask = df["yoe"].values < 5          # JD minimum: 5 years
+    hp_count  = honeypot_mask.sum()
+    yoe_count = yoe_floor_mask.sum()
+    print(f"Honeypots gated out:       {hp_count}")
+    print(f"Under-5yr gated out:       {yoe_count}")
 
     # ── 9. Final scores ────────────────────────────────────────────────────────
     final_scores = match_scores * avail_mult
-    final_scores[honeypot_mask] = 0.0   # hard exclusion
+    final_scores[honeypot_mask]  = 0.0   # hard exclusion
+    final_scores[yoe_floor_mask] = 0.0   # hard yoe floor
 
     # Normalize to [0, 1] (top candidate = 1.0)
     top_val = final_scores.max()
