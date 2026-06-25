@@ -14,9 +14,13 @@ Usage:
 
 import argparse
 import os
+import sys
 import time
 from datetime import date
 from pathlib import Path
+
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import bm25s
 import numpy as np
@@ -73,7 +77,7 @@ JD_BM25_QUERY = (
 # Scoring helpers
 # ─────────────────────────────────────────────────────────────────────────────
 def _percentile_normalize(scores: np.ndarray) -> np.ndarray:
-    """Rank-based linear normalization: lowest score → 0.0, highest → 1.0."""
+    """Rank-based linear normalization: lowest score -> 0.0, highest -> 1.0."""
     n = len(scores)
     if n <= 1:
         return np.zeros(n)
@@ -87,9 +91,9 @@ def _yoe_fit(yoe: float) -> float:
     if yoe <= 0:
         return 0.0
     if yoe < 3:
-        return yoe / 3 * 0.4          # 0 → 0.40  (too junior)
+        return yoe / 3 * 0.4          # 0 -> 0.40  (too junior)
     if yoe < 5:
-        return 0.4 + (yoe - 3) / 2 * 0.4   # 3 → 0.80
+        return 0.4 + (yoe - 3) / 2 * 0.4   # 3 -> 0.80
     if yoe <= 9:
         return 1.0                     # sweet spot
     if yoe <= 12:
@@ -117,10 +121,10 @@ def _availability_multiplier(row: pd.Series) -> float:
     if row["open_to_work"]:
         avail += 0.10
 
-    # Responsiveness to recruiters (0 → +0.10)
+    # Responsiveness to recruiters (0 -> +0.10)
     avail += 0.10 * float(row["response_rate"])
 
-    # Interview reliability (0 → +0.07)
+    # Interview reliability (0 -> +0.07)
     avail += 0.07 * float(row["interview_completion_rate"])
 
     # Notice period
@@ -361,7 +365,7 @@ def main() -> None:
     # ── 4. Dense cosine similarity ────────────────────────────────────────────
     print("Computing dense similarity …")
     t0 = time.time()
-    # embeddings already L2-normalised → dot product = cosine similarity
+    # embeddings already L2-normalised -> dot product = cosine similarity
     dense_scores = (embeddings @ jd_vec).astype(np.float64)   # (N,)
     print(f"  Dense done  ({time.time()-t0:.1f}s)")
 
@@ -377,7 +381,7 @@ def main() -> None:
 
     hybrid_raw = 0.35 * bm25_f + 0.65 * dense_scores         # [0, ~1]
 
-    # Percentile-normalize: rank-based 0→1 across the full pool (change #1)
+    # Percentile-normalize: rank-based 0->1 across the full pool (change #1)
     retrieval_pct = _percentile_normalize(hybrid_raw)         # [0, 1]
     print(f"  Done  ({time.time()-t0:.1f}s)")
 
@@ -441,7 +445,7 @@ def main() -> None:
     # ── 11. Write CSV ─────────────────────────────────────────────────────────
     out_df = pd.DataFrame(rows, columns=["candidate_id", "rank", "score", "reasoning"])
     out_df.to_csv(args.out, index=False)
-    print(f"\nSubmission written → {args.out}  ({len(out_df)} rows)")
+    print(f"\nSubmission written -> {args.out}  ({len(out_df)} rows)")
 
     # ── 12. Diagnostics ───────────────────────────────────────────────────────
     total_elapsed = time.time() - t_wall

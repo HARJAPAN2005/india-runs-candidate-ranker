@@ -14,10 +14,16 @@ Usage:
 
 import argparse
 import json
+import os
 import re
+import sys
 import time
 from datetime import date
 from pathlib import Path
+
+# Force UTF-8 stdout on Windows so print() doesn't crash on non-ASCII progress chars
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 import bm25s
 import numpy as np
@@ -235,8 +241,8 @@ def extract_features(cand: dict) -> dict:
     )
 
     # ── Skills ───────────────────────────────────────────────────────────────
-    ai_core_count = has_python = False
     ai_core_count = 0
+    has_python = False
     for s in skills:
         nm = (s.get("name") or "").lower()
         pr = _PROF_RANK.get(s.get("proficiency", "beginner"), 1)
@@ -417,7 +423,7 @@ def main() -> None:
     df = pd.DataFrame(records)
     df.to_parquet(ARTIFACTS / "candidate_features.parquet", index=False)
     np.save(ARTIFACTS / "candidate_ids.npy", df["candidate_id"].values.astype(str))
-    print(f"          {df.shape[0]:,} rows × {df.shape[1]} cols → "
+    print(f"          {df.shape[0]:,} rows x {df.shape[1]} cols -> "
           f"candidate_features.parquet  ({time.time() - t0:.1f}s)")
 
     # ── 4. Build BM25 index ──────────────────────────────────────────────────
@@ -428,7 +434,7 @@ def main() -> None:
     retriever.index(corpus_tokens)
     bm25_dir = str(ARTIFACTS / "bm25_index")
     retriever.save(bm25_dir)
-    print(f"          Indexed {n:,} docs → bm25_index/  ({time.time() - t0:.1f}s)")
+    print(f"          Indexed {n:,} docs -> bm25_index/  ({time.time() - t0:.1f}s)")
 
     # ── 5. Compute embeddings + save model locally ───────────────────────────
     print(f"Step 5/5  Embedding with {args.model} (batch={args.batch_size}) …")
@@ -439,7 +445,7 @@ def main() -> None:
         career_docs,
         batch_size=args.batch_size,
         show_progress_bar=True,
-        normalize_embeddings=True,   # L2-norm → cosine = dot product
+        normalize_embeddings=True,   # L2-norm: cosine = dot product
         convert_to_numpy=True,
     )
     embeddings = embeddings.astype(np.float32)
