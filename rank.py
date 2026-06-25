@@ -87,18 +87,48 @@ def _percentile_normalize(scores: np.ndarray) -> np.ndarray:
 
 
 def _yoe_fit(yoe: float) -> float:
-    """Map years-of-experience to a [0, 1] fit score. Sweet spot 5–9 yrs."""
+    """
+    Map years-of-experience to a [0, 1] fit score.
+    Sweet spot: 5–11 yrs. Soft linear decay beyond 11 (-4% per year over 11).
+    """
     if yoe <= 0:
         return 0.0
     if yoe < 3:
         return yoe / 3 * 0.4          # 0 -> 0.40  (too junior)
     if yoe < 5:
-        return 0.4 + (yoe - 3) / 2 * 0.4   # 3 -> 0.80
-    if yoe <= 9:
+        return 0.4 + (yoe - 3) / 2 * 0.6   # 3 -> 0.40, 5 -> 1.0
+    if yoe <= 11:
         return 1.0                     # sweet spot
-    if yoe <= 12:
-        return 1.0 - (yoe - 9) / 3 * 0.1   # 9–12: slight decay
-    return 0.85                        # very senior, possible over-qualification
+    # Soft linear decay: -4% per year beyond 11, floor at 0.60
+    return max(0.60, 1.0 - (yoe - 11) * 0.04)
+
+
+# Tiered recsys evidence families.
+# Strong (2.0 pts): specific ranking/retrieval/recsys evidence — the real signal.
+# Medium (1.0 pt): infra/tooling relevant but not proof of ranking systems.
+# Weak (0.3 pts): generic signals easily faked or incidentally present.
+# Normalised by 8 (4 strong families = full credit); capped at 1.0.
+_RECSYS_STRONG = frozenset({
+    "recommendation", "ltr", "eval_metrics", "dense_retrieval", "hybrid_retrieval",
+    "vector_search", "vector_db", "collab_filter", "ir", "retrieval_quality",
+})
+_RECSYS_WEAK = frozenset({
+    "ab_testing", "search_system", "deployed_ml",
+})
+# Everything else (ranking, search_infra, ml_serving) → medium (1.0 pt)
+
+
+def _tiered_recsys_score(terms_str: str) -> float:
+    """
+    Compute a [0, 1] recsys evidence score that weights strong signals clearly
+    above generic ones (A/B testing, generic search, etc.).
+    """
+    terms = {t for t in str(terms_str).split(",") if t}
+    pts = sum(
+        2.0 if t in _RECSYS_STRONG else 0.3 if t in _RECSYS_WEAK else 1.0
+        for t in terms
+    )
+    return min(pts / 8.0, 1.0)
 
 
 def _availability_multiplier(row: pd.Series) -> float:
@@ -153,14 +183,14 @@ def _structural_adjustments(row: pd.Series) -> float:
     adj = 0.0
 
     # Positive signals ───────────────────────────────────────────────────────
-    adj += 0.10 * _yoe_fit(float(row["yoe"]))                 # [0, 0.10]
+    adj += 0.18 * _yoe_fit(float(row["yoe"]))                 # [0, 0.18]
 
     prod_ratio = float(row["product_ratio"])
     adj += 0.18 * prod_ratio                                   # [0, 0.18]
     if row["recent_role_product"]:
         adj += 0.05                                            # recency bonus
 
-    adj += 0.22 * float(row["recsys_evidence_score"])          # [0, 0.22]  biggest signal
+    adj += 0.22 * _tiered_recsys_score(row["recsys_terms_str"]) # [0, 0.22]  biggest signal
     if row["vector_db_evidence"]:
         adj += 0.10
     if row["embedding_evidence"]:
@@ -390,7 +420,9 @@ def main() -> None:
     t0 = time.time()
 
     struct_adj = df.apply(_structural_adjustments, axis=1).values.astype(np.float64)
-    match_scores = np.clip(retrieval_pct + struct_adj, 0.0, 1.0)
+    # Floor at 0 only — no ceiling. Capping at 1.0 caused all top candidates to
+    # tie because even small positive adjustments overflow the [0,1] retrieval range.
+    match_scores = np.maximum(0.0, retrieval_pct + struct_adj)
 
     print(f"  Done  ({time.time()-t0:.1f}s)")
 

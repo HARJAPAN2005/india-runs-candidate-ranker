@@ -43,6 +43,12 @@ SERVICES_FIRMS = frozenset({
     "syntel", "virtusa", "zensar", "kpit", "persistent systems", "cyient",
     "igate", "mastech", "niit technologies", "birlasoft", "dxc technology",
     "ntt data", "unisys",
+    # Substring-matched: any "Genpact *" variant is caught because _is_services
+    # does `any(firm in company_lower for firm in SERVICES_FIRMS)`.
+    "genpact",
+    # Other frequently-seen outsourcing firms missing from the original list
+    "ibm global", "epam", "globallogic", "stefanini", "wipro bps",
+    "atos", "sopra steria", "hexaware", "coforge", "mphasis",
 })
 
 # Companies that register as "IT Services" but are actually product companies
@@ -389,76 +395,191 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        default="BAAI/bge-small-en-v1.5",
-        help="Sentence-transformer model ID (downloaded from HF, then saved locally)",
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        help="Sentence-transformer model ID. Default is all-MiniLM-L6-v2 (6-layer, "
+             "256 max tokens — fast and memory-safe on CPU).",
     )
-    parser.add_argument("--batch-size", type=int, default=256)
+    parser.add_argument("--batch-size", type=int, default=64,
+                        help="Encoding batch size. Keep <=64 on 16 GB CPU-only.")
+    parser.add_argument("--doc-max-chars", type=int, default=1500,
+                        help="Truncate career_doc to this many characters before "
+                             "encoding. Caps token length, prevents OOM.")
+    parser.add_argument("--checkpoint-every", type=int, default=5000,
+                        help="Save partial embeddings every N docs (resume-safe).")
+    parser.add_argument("--force-features", action="store_true",
+                        help="Re-extract features and rebuild BM25 even if parquet "
+                             "already exists. Skips embedding if npy is present.")
     args = parser.parse_args()
 
     ARTIFACTS.mkdir(exist_ok=True)
     t_total = time.time()
 
-    # ── 1. Parse ─────────────────────────────────────────────────────────────
-    print("Step 1/5  Parsing candidates …")
-    t0 = time.time()
-    candidates: list[dict] = []
-    with open(args.candidates, encoding="utf-8") as fh:
-        for line in fh:
-            line = line.strip()
-            if line:
-                candidates.append(json.loads(line))
-    n = len(candidates)
-    print(f"          {n:,} candidates  ({time.time() - t0:.1f}s)")
-
-    # ── 2. Extract features ──────────────────────────────────────────────────
-    print("Step 2/5  Extracting features …")
-    t0 = time.time()
-    records = [extract_features(c) for c in candidates]
-    career_docs = [r.pop("career_doc") for r in records]  # keep text separate
-    print(f"          Done  ({time.time() - t0:.1f}s)")
-
-    # ── 3. Save features + candidate_ids ─────────────────────────────────────
-    print("Step 3/5  Saving feature table …")
-    t0 = time.time()
-    df = pd.DataFrame(records)
-    df.to_parquet(ARTIFACTS / "candidate_features.parquet", index=False)
-    np.save(ARTIFACTS / "candidate_ids.npy", df["candidate_id"].values.astype(str))
-    print(f"          {df.shape[0]:,} rows x {df.shape[1]} cols -> "
-          f"candidate_features.parquet  ({time.time() - t0:.1f}s)")
-
-    # ── 4. Build BM25 index ──────────────────────────────────────────────────
-    print("Step 4/5  Building BM25 index …")
-    t0 = time.time()
-    corpus_tokens = bm25s.tokenize(career_docs, stopwords="en", show_progress=False)
-    retriever = bm25s.BM25()
-    retriever.index(corpus_tokens)
-    bm25_dir = str(ARTIFACTS / "bm25_index")
-    retriever.save(bm25_dir)
-    print(f"          Indexed {n:,} docs -> bm25_index/  ({time.time() - t0:.1f}s)")
-
-    # ── 5. Compute embeddings + save model locally ───────────────────────────
-    print(f"Step 5/5  Embedding with {args.model} (batch={args.batch_size}) …")
-    t0 = time.time()
-    model = SentenceTransformer(args.model)
-
-    embeddings = model.encode(
-        career_docs,
-        batch_size=args.batch_size,
-        show_progress_bar=True,
-        normalize_embeddings=True,   # L2-norm: cosine = dot product
-        convert_to_numpy=True,
+    features_ready = (
+        not args.force_features
+        and (ARTIFACTS / "candidate_features.parquet").exists()
+        and (ARTIFACTS / "candidate_ids.npy").exists()
+        and (ARTIFACTS / "bm25_index").exists()
     )
-    embeddings = embeddings.astype(np.float32)
-    np.save(ARTIFACTS / "career_embeddings.npy", embeddings)
-    print(f"          Embeddings {embeddings.shape} saved  ({time.time() - t0:.1f}s)")
+    emb_ready = (
+        (ARTIFACTS / "career_embeddings.npy").exists()
+        and (ARTIFACTS / "model").exists()
+    )
+
+    career_docs: list[str] = []
+
+    if features_ready:
+        # ── Steps 1-4 already done: just reload docs for embedding ──────────
+        print("Steps 1-4 artifacts already present — skipping to step 5.")
+        print("Reloading candidates to rebuild career_docs …")
+        t0 = time.time()
+        with open(args.candidates, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                cand = json.loads(line)
+                profile = cand.get("profile", {})
+                ch = sorted(
+                    cand.get("career_history", []),
+                    key=lambda r: r.get("start_date", "0000-00-00"),
+                    reverse=True,
+                )
+                parts = [profile.get("headline", ""), profile.get("summary", "")]
+                for r in ch:
+                    parts.append(
+                        f"{r.get('title','')} at {r.get('company','')}: "
+                        f"{r.get('description','')}"
+                    )
+                career_docs.append("\n".join(p for p in parts if p.strip()))
+        n = len(career_docs)
+        print(f"  Reloaded {n:,} career docs  ({time.time()-t0:.1f}s)")
+        df = pd.read_parquet(ARTIFACTS / "candidate_features.parquet")
+    else:
+        # ── Full pipeline ────────────────────────────────────────────────────
+        print("Step 1/5  Parsing candidates …")
+        t0 = time.time()
+        candidates: list[dict] = []
+        with open(args.candidates, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line:
+                    candidates.append(json.loads(line))
+        n = len(candidates)
+        print(f"          {n:,} candidates  ({time.time() - t0:.1f}s)")
+
+        print("Step 2/5  Extracting features …")
+        t0 = time.time()
+        records = [extract_features(c) for c in candidates]
+        career_docs = [r.pop("career_doc") for r in records]
+        print(f"          Done  ({time.time() - t0:.1f}s)")
+
+        print("Step 3/5  Saving feature table …")
+        t0 = time.time()
+        df = pd.DataFrame(records)
+        df.to_parquet(ARTIFACTS / "candidate_features.parquet", index=False)
+        np.save(ARTIFACTS / "candidate_ids.npy", df["candidate_id"].values.astype(str))
+        print(f"          {df.shape[0]:,} rows x {df.shape[1]} cols -> "
+              f"candidate_features.parquet  ({time.time() - t0:.1f}s)")
+
+        print("Step 4/5  Building BM25 index …")
+        t0 = time.time()
+        corpus_tokens = bm25s.tokenize(career_docs, stopwords="en", show_progress=False)
+        retriever = bm25s.BM25()
+        retriever.index(corpus_tokens)
+        retriever.save(str(ARTIFACTS / "bm25_index"))
+        print(f"          Indexed {n:,} docs -> bm25_index/  ({time.time() - t0:.1f}s)")
+
+    # ── Step 5: Embeddings (with truncation + checkpointing) ─────────────────
+    emb_path   = ARTIFACTS / "career_embeddings.npy"
+    ckpt_path  = ARTIFACTS / "career_embeddings_ckpt.npy"
+    ckpt_n_path = ARTIFACTS / "career_embeddings_ckpt_n.txt"
+
+    if emb_ready:
+        print("Step 5/5  career_embeddings.npy and model already present — skipping embedding.")
+        elapsed = time.time() - t_total
+        print(f"\n{'='*55}")
+        print(f"Total wall time: {elapsed:.1f}s  ({elapsed/60:.1f} min)")
+        print(f"\nArtifact sizes:")
+        for p in sorted(ARTIFACTS.rglob("*")):
+            if p.is_file():
+                sz = p.stat().st_size
+                label = f"{sz/1024**2:.1f} MB" if sz > 1024**2 else f"{sz/1024:.0f} KB"
+                print(f"  {p.relative_to(ARTIFACTS)}  {label}")
+        hp_count = df["is_honeypot"].sum()
+        print(f"\nHoneypot candidates flagged: {hp_count}")
+        print(f"Services-only careers:       {df['services_only_career'].sum()}")
+        print(f"Research-only:               {df['is_research_only'].sum()}")
+        print(f"Has recsys evidence (>0):    {(df['recsys_evidence_score'] > 0).sum()}")
+        return
+
+    # Truncate docs to cap token length and prevent OOM
+    truncated_docs = [d[:args.doc_max_chars] for d in career_docs]
+
+    # Check for partial checkpoint
+    start_idx = 0
+    partial: np.ndarray | None = None
+    if ckpt_path.exists() and ckpt_n_path.exists():
+        saved_n = int(ckpt_n_path.read_text().strip())
+        if 0 < saved_n < n:
+            partial = np.load(str(ckpt_path))
+            start_idx = saved_n
+            print(f"Resuming from checkpoint at doc {start_idx:,} / {n:,}")
+
+    print(f"Step 5/5  Embedding with {args.model} "
+          f"(batch={args.batch_size}, doc_max_chars={args.doc_max_chars}) …")
+    if start_idx > 0:
+        print(f"          Resuming from {start_idx:,} (checkpoint found)")
+    t0 = time.time()
+
+    model = SentenceTransformer(args.model)
+    dim = model.get_sentence_embedding_dimension()
+
+    # Preallocate output array
+    embeddings = np.zeros((n, dim), dtype=np.float32)
+    if partial is not None:
+        embeddings[:start_idx] = partial
+
+    # Encode in chunks, saving checkpoints
+    chunk_size = args.checkpoint_every
+    for chunk_start in range(start_idx, n, chunk_size):
+        chunk_end  = min(chunk_start + chunk_size, n)
+        chunk_docs = truncated_docs[chunk_start:chunk_end]
+
+        chunk_emb = model.encode(
+            chunk_docs,
+            batch_size=args.batch_size,
+            show_progress_bar=True,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+        ).astype(np.float32)
+
+        embeddings[chunk_start:chunk_end] = chunk_emb
+
+        # Save checkpoint
+        np.save(str(ckpt_path), embeddings[:chunk_end])
+        ckpt_n_path.write_text(str(chunk_end))
+        elapsed_so_far = time.time() - t0
+        rate = (chunk_end - start_idx) / elapsed_so_far
+        remaining = (n - chunk_end) / rate if rate > 0 else 0
+        print(f"  Checkpoint {chunk_end:,}/{n:,}  "
+              f"elapsed={elapsed_so_far/60:.1f}m  "
+              f"ETA={remaining/60:.1f}m")
+
+    np.save(str(emb_path), embeddings)
+    # Clean up checkpoint files
+    if ckpt_path.exists():
+        ckpt_path.unlink()
+    if ckpt_n_path.exists():
+        ckpt_n_path.unlink()
+    print(f"  Embeddings {embeddings.shape} saved  ({(time.time()-t0)/60:.1f}m)")
 
     model_dir = str(ARTIFACTS / "model")
-    print(f"          Saving model to {model_dir} for offline rank.py …")
+    print(f"  Saving model to {model_dir} for offline rank.py …")
     model.save(model_dir)
 
     # ── Summary ──────────────────────────────────────────────────────────────
     elapsed = time.time() - t_total
-    print(f"\n{'─'*55}")
+    print(f"\n{'='*55}")
     print(f"Total wall time: {elapsed:.1f}s  ({elapsed/60:.1f} min)")
     print(f"\nArtifact sizes:")
     for p in sorted(ARTIFACTS.rglob("*")):
@@ -467,7 +588,6 @@ def main() -> None:
             label = f"{sz/1024**2:.1f} MB" if sz > 1024**2 else f"{sz/1024:.0f} KB"
             print(f"  {p.relative_to(ARTIFACTS)}  {label}")
 
-    # Honeypot summary (for calibration)
     hp_count = df["is_honeypot"].sum()
     print(f"\nHoneypot candidates flagged: {hp_count}")
     print(f"Services-only careers:       {df['services_only_career'].sum()}")
