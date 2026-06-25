@@ -57,6 +57,17 @@ _PRODUCT_EXCEPTIONS = frozenset({
     "shopify", "freshworks", "zoho", "zerodha",
 })
 
+# Industry labels that indicate an IT/tech services or outsourcing firm.
+# Checked case-insensitively; extends "IT Services" to catch "AI Services",
+# "Technology Services", "Digital Services", etc.
+_SERVICES_INDUSTRIES: frozenset[str] = frozenset({
+    "it services", "ai services", "technology services",
+    "information technology services", "it consulting", "tech consulting",
+    "software services", "it outsourcing", "managed services",
+    "it staffing", "technology staffing", "engineering services",
+    "digital services", "outsourcing", "bpo",
+})
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Compiled regexes
 # ─────────────────────────────────────────────────────────────────────────────
@@ -147,13 +158,19 @@ def _parse_date(s) -> date | None:
 
 
 def _is_services(company: str, industry: str) -> bool:
-    """Return True if this role is at a services/outsourcing firm."""
-    if industry and industry.lower() == "it services":
-        c = (company or "").lower()
+    """Return True if this role is at a services/outsourcing firm.
+
+    Two independent checks — either alone is sufficient:
+    1. Industry label is in the known services-industry set (catches "AI Services",
+       "Technology Services", etc., not just the old hard-coded "IT Services").
+    2. Company name contains a known services-firm substring (catches "Genpact AI",
+       "TCS Digital", "Infosys BPM", etc.).
+    """
+    c = (company or "").lower()
+    if industry and industry.lower() in _SERVICES_INDUSTRIES:
         if any(ex in c for ex in _PRODUCT_EXCEPTIONS):
             return False
         return True
-    c = (company or "").lower()
     return any(firm in c for firm in SERVICES_FIRMS)
 
 

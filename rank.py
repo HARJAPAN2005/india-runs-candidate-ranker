@@ -230,6 +230,12 @@ def _structural_adjustments(row: pd.Series) -> float:
     # Hard JD disqualifiers ──────────────────────────────────────────────────
     if row["services_only_career"]:
         adj -= 0.60    # "only at consulting firms their entire career"
+    elif _current_company_is_services(str(row.get("current_company", ""))):
+        # Graded penalty proportional to services-career-ratio.
+        # Joined Accenture last month after 10yr at Google → services_ratio ≈ 0.05 → -0.015
+        # Genpact AI (65% of career) → services_ratio ≈ 0.66 → -0.197
+        services_ratio = max(0.0, 1.0 - prod_ratio)
+        adj -= 0.30 * services_ratio
     if row["is_research_only"]:
         adj -= 0.55    # "pure research without production deployment"
     if row["cv_speech_without_nlp"]:
@@ -493,24 +499,20 @@ def main() -> None:
     avail_mult = df.apply(_availability_multiplier, axis=1).values.astype(np.float64)
     print(f"  Done  ({time.time()-t0:.1f}s)")
 
-    # ── 8. Hard gates (honeypot + yoe floor + current-employer services) ──────
+    # ── 8. Hard gates (honeypot + yoe floor) ─────────────────────────────────
     honeypot_mask  = df["is_honeypot"].values.astype(bool)
     yoe_floor_mask = df["yoe"].values < 5          # JD minimum: 5 years
-    curr_svc_mask  = df["current_company"].apply(
-        lambda co: _current_company_is_services(str(co))
-    ).values.astype(bool)
-    hp_count   = honeypot_mask.sum()
-    yoe_count  = yoe_floor_mask.sum()
-    csvc_count = curr_svc_mask.sum()
-    print(f"Honeypots gated out:           {hp_count}")
-    print(f"Under-5yr gated out:           {yoe_count}")
-    print(f"Current-employer svc gated out:{csvc_count}")
+    hp_count  = honeypot_mask.sum()
+    yoe_count = yoe_floor_mask.sum()
+    print(f"Honeypots gated out:       {hp_count}")
+    print(f"Under-5yr gated out:       {yoe_count}")
+    # Note: current-employer services is handled as a graded penalty inside
+    # _structural_adjustments (proportional to services-career-ratio), not a hard gate.
 
     # ── 9. Final scores ────────────────────────────────────────────────────────
     final_scores = match_scores * avail_mult
     final_scores[honeypot_mask]  = 0.0   # hard exclusion
     final_scores[yoe_floor_mask] = 0.0   # hard yoe floor
-    final_scores[curr_svc_mask]  = 0.0   # currently at services firm
 
     # Normalize to [0, 1] (top candidate = 1.0)
     top_val = final_scores.max()
