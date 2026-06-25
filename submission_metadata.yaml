@@ -1,0 +1,65 @@
+team_name: "Harjapan Singh Bhatia"
+
+primary_contact:
+  name: "Harjapan Singh Bhatia"
+  email: "harjapansingh120405@gmail.com"
+  phone: "+91-9915385683"
+
+team_members:
+  - name: "Harjapan Singh Bhatia"
+    email: "harjapansingh120405@gmail.com"
+    role: "Team Lead / ML Engineer"
+
+github_repo: "https://github.com/HARJAPAN2005/india-runs-candidate-ranker"
+
+sandbox_link: "https://colab.research.google.com/github/HARJAPAN2005/india-runs-candidate-ranker/blob/main/demo.ipynb"
+
+reproduce_command: "python rank.py --candidates ./candidates.jsonl --out ./submission.csv"
+
+compute:
+  platform: "Local Windows PC"
+  cpu_cores: 8
+  ram_gb: 16
+  python_version: "3.10+"
+  os: "Windows 11"
+  uses_gpu_for_inference: false
+  has_network_during_ranking: false
+  pre_computation_required: true
+  pre_computation_time_minutes: 35
+
+ai_tools_used:
+  - "Claude"
+
+ai_usage_summary: |
+  Used Claude for architecture discussion, code review, scoring-design
+  decisions, and debugging throughout development. All engineering decisions
+  (feature design, scoring weights, honeypot logic, seniority gating) were
+  directed and reviewed by the author. No candidate data was fed to any
+  hosted LLM, and the ranking step makes zero LLM calls.
+
+methodology_summary: |
+  Our system ranks 100,000 candidates for a Senior AI Engineer role by genuine
+  fit, not keyword overlap. The core decision: we build BM25 and dense embeddings
+  over candidates' career-history descriptions only — never their self-reported
+  skills lists — so a profile listing "vector search" but describing
+  churn-prediction work gets no credit. A two-phase design meets the production
+  constraints: heavy embedding runs offline (~35 min), while the ranking step
+  completes in 4.3 seconds, CPU-only, fully offline. Scoring combines hybrid
+  retrieval (rank-percentile normalised) with structural JD-fit adjustments —
+  tiered recsys evidence (learning-to-rank and NDCG evaluation weighted far above
+  generic A/B testing), product-vs-services career composition, and years-in-range
+  fit — then a behavioural availability multiplier from 23 platform signals. Hard
+  gates enforce the JD's 5-year seniority floor and remove internally impossible
+  "honeypot" profiles via four consistency checks. Reasoning is assembled from
+  verified profile facts with zero LLM calls, eliminating hallucination. The
+  result: a top-100 shortlist with zero honeypots, zero services-only profiles,
+  and zero under-seniority candidates — correctly demoting keyword-stuffers and
+  elevating strong candidates who describe their work in plain language rather
+  than buzzwords.
+
+declarations:
+  read_submission_spec: true
+  code_is_original_work: true
+  no_collusion: true
+  honeypot_check_done: true
+  reproduction_tested: true
