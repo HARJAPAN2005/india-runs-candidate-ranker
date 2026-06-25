@@ -1,10 +1,32 @@
+# Challenge data — not committed (487 MB dataset + sample files + docs)
+# Only validate_submission.py is kept from this directory.
+India_runs_data_and_ai_challenge/*.jsonl
+India_runs_data_and_ai_challenge/*.json
+India_runs_data_and_ai_challenge/*.csv
+India_runs_data_and_ai_challenge/*.docx
+India_runs_data_and_ai_challenge/*.yaml
+
+# Test / scratch scripts
+test_*.py
+
+# Generated artifacts (embeddings, BM25 index, model weights, parquet)
+artifacts/
+
+# Output
+submission.csv
+
+# Logs
+*.log
+
+# Python bytecode
 __pycache__/
 *.pyc
-artifacts/
-test_*.py
+*.pyo
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# macOS
 .DS_Store
-*.csv
-*.jsonl
-*.json
-*.docx
-*.yaml

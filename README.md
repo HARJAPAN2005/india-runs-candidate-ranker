@@ -6,26 +6,51 @@ structured JD-fit adjustments, and a behavioural availability multiplier.
 
 ## Reproduce
 
-```bash
-# Step 1 — offline, slow (CPU, ~35 min, needs network once to download embedding model)
-python precompute.py
+### 1. Place the dataset
 
-# Step 2 — fast ranker (CPU, no network, ≤5 min)
-python rank.py
+The challenge dataset is not committed to this repo (487 MB). Download it from the
+Redrob challenge portal and place it at:
+
+```
+India_runs_data_and_ai_challenge/candidates.jsonl
 ```
 
-Output: `submission.csv` — 100 ranked candidates.
+The directory and file name must match exactly — `precompute.py` reads from that path.
 
-Validate:
-```bash
-python India_runs_data_and_ai_challenge/validate_submission.py submission.csv
-```
-
-## Requirements
+### 2. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
+
+Python 3.10+. No GPU required. Peak RAM < 4 GB during ranking.
+
+### 3. Build artifacts (run once, ~35 min on CPU)
+
+```bash
+python precompute.py
+```
+
+Downloads `all-MiniLM-L6-v2` from HuggingFace on first run (86 MB, needs network).
+Saves everything to `artifacts/` — subsequent runs skip completed steps automatically.
+
+### 4. Rank candidates (≤5 min, no network)
+
+```bash
+python rank.py
+```
+
+Outputs `submission.csv` — 100 ranked candidates.
+
+### 5. Validate
+
+```bash
+python India_runs_data_and_ai_challenge/validate_submission.py submission.csv
+```
+
+Expected output: `Submission is valid.`
+
+## Requirements
 
 Python 3.10+. No GPU required. Peak RAM < 4 GB during ranking.
 
