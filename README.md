@@ -23,7 +23,9 @@ The directory and file name must match exactly — `precompute.py` reads from th
 pip install -r requirements.txt
 ```
 
-Python 3.10+. No GPU required. Peak RAM < 4 GB during ranking.
+Python 3.10+. No GPU required.
+
+Measured peak RAM: `rank.py` ~1 GB · `precompute.py` ~1.5 GB (embedding step)
 
 ### 3. Build artifacts (run once, ~35 min on CPU)
 
@@ -52,7 +54,13 @@ Expected output: `Submission is valid.`
 
 ## Requirements
 
-Python 3.10+. No GPU required. Peak RAM < 4 GB during ranking.
+Python 3.10+. No GPU required.
+
+Measured peak RAM:
+- `rank.py` — **~1 GB** (model weights + 100 K × 384 embeddings + BM25 index)
+- `precompute.py` — **~1.5 GB** peak during the embedding step (sentence-transformer
+  runtime buffers + growing 100 K × 384 output array); ~0.8 GB for feature extraction
+  and BM25 indexing
 
 ## How it works
 
